@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 #
 # memcached-tool:
-#   stats/management tool for memcached.
+#   stats/management tool for memcached. (Memcached状态统计和管理工具)
 #
 # Author:
 #   Brad Fitzpatrick <brad@danga.com>
@@ -45,16 +45,16 @@ undef $mode if @ARGV;
 
 die
     "Usage: memcached-tool <host[:port] | /path/to/socket> [mode]\n
-       memcached-tool 10.0.0.5:11211 display    # shows slabs
+       memcached-tool 10.0.0.5:11211 display    # shows slabs (显示Slab Classes的统计信息)
        memcached-tool 10.0.0.5:11211            # same.  (default is display)
-       memcached-tool 10.0.0.5:11211 stats      # shows general stats
-       memcached-tool 10.0.0.5:11211 settings   # shows settings stats
+       memcached-tool 10.0.0.5:11211 stats      # shows general stats (显示服务器的一般状态信息)
+       memcached-tool 10.0.0.5:11211 settings   # shows settings stats (显示服务器的设置信息)
        memcached-tool 10.0.0.5:11211 sizes      # shows sizes stats
        memcached-tool 10.0.0.5:11211 dump       # dumps keys and values
 
-WARNING! sizes is a development command.
-As of 1.4 it is still the only command which will lock your memcached instance for some time.
-If you have many millions of stored items, it can become unresponsive for several minutes.
+WARNING! sizes is a development command. (警告：sizes是一个开发中的命令，不要在生产环境中使用它！)
+As of 1.4 it is still the only command which will lock your memcached instance for some time. (它可能会锁住你的Memcached实例一段时间)
+If you have many millions of stored items, it can become unresponsive for several minutes. (如果服务器存储了上百万的记录，它会在好几分钟内都没有响应。)
 Run this at your own risk. It is roadmapped to either make this feature optional
 or at least speed it up.
 " unless $addr && $mode;
@@ -80,7 +80,7 @@ if ($mode eq 'dump') {
     my %items;
     my $totalitems;
 
-    print $sock "stats items\r\n";
+    print $sock "stats items\r\n"; # 获取记录统计状态
 
     while (<$sock>) {
         last if /^END/;
@@ -95,7 +95,7 @@ if ($mode eq 'dump') {
 
     foreach my $bucket (sort(keys(%items))) {
         print STDERR "Dumping bucket $bucket - " . $items{$bucket} . " total items\n";
-        print $sock "stats cachedump $bucket $items{$bucket}\r\n";
+        print $sock "stats cachedump $bucket $items{$bucket}\r\n"; # 备份特定桶中的记录缓存数据
         my %keyexp;
         while (<$sock>) {
             last if /^END/;
@@ -127,7 +127,7 @@ if ($mode eq 'dump') {
 if ($mode eq 'stats') {
     my %items;
 
-    print $sock "stats\r\n";
+    print $sock "stats\r\n"; # 获取服务器的一般状态信息
 
     while (<$sock>) {
         last if /^END/;
@@ -147,7 +147,7 @@ if ($mode eq 'stats') {
 if ($mode eq 'settings') {
     my %items;
 
-    print $sock "stats settings\r\n";
+    print $sock "stats settings\r\n"; # 获取服务器的设置信息
 
     while (<$sock>) {
         last if /^END/;
@@ -189,7 +189,7 @@ my %items;  # class -> { number, age, chunk_size, chunks_per_page,
 #            total_pages, total_chunks, used_chunks,
 #            free_chunks, free_chunks_end }
 
-print $sock "stats items\r\n";
+print $sock "stats items\r\n"; # 获取记录的统计信息
 my $max = 0;
 while (<$sock>) {
     last if /^END/;
@@ -198,7 +198,7 @@ while (<$sock>) {
     }
 }
 
-print $sock "stats slabs\r\n";
+print $sock "stats slabs\r\n"; # 获取Slab Class的统计信息
 while (<$sock>) {
     last if /^END/;
     if (/^STAT (\d+):(\w+) (\d+)/) {
@@ -207,6 +207,8 @@ while (<$sock>) {
     }
 }
 
+# 输出格式：块大小  LRU队列中最老的记录的存储时间  分配给该组的内存总页数  目前存储在该组的记录数  是否已存满？      被LRU驱逐的记录数  最近被驱逐的记录的最新访问时间（秒）  是否出现“底层的“特定大小的chunk的组”无法存储新的记录的次数”现象？
+# 输出内容：chunk_size    age                      total_pages             number                  free_chunks_end   evicted            evicted_time                          outofmemory
 print "  #  Item_Size  Max_age   Pages   Count   Full?  Evicted Evict_Time OOM\n";
 foreach my $n (1..$max) {
     my $it = $items{$n};

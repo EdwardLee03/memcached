@@ -768,8 +768,8 @@ END\r\n
 | chunks_per_page | How many chunks exist within one page. A page by         |
 |                 | default is less than or equal to one megabyte in size.   |
 |                 | Slabs are allocated by page, then broken into chunks.    |
-| total_pages     | Total number of pages allocated to the slab class.       |
-| total_chunks    | Total number of chunks allocated to the slab class.      |
+| total_pages     | Total number of pages allocated to the slab class.       | 分配给该组的内存总页数
+| total_chunks    | Total number of chunks allocated to the slab class.      | 分配给该组的内存总块数（可缓存的总记录数）
 | get_hits        | Total number of get requests serviced by this class.     |
 | cmd_set         | Total number of set requests storing data in this class. |
 | delete_hits     | Total number of successful deletes from this class.      |
@@ -781,7 +781,7 @@ END\r\n
 | touch_hits      | Total number of touches serviced by this class.          |
 | used_chunks     | How many chunks have been allocated to items.            |
 | free_chunks     | Chunks not yet allocated to items, or freed via delete.  |
-| free_chunks_end | Number of free chunks at the end of the last allocated   |
+| free_chunks_end | Number of free chunks at the end of the last allocated   | 最后分配的页的末端的空闲块数量
 |                 | page.                                                    |
 | mem_requested   | Number of bytes requested to be stored in this slab[*].  |
 | active_slabs    | Total number of slab classes allocated.                  |
