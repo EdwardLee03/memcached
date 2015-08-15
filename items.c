@@ -22,27 +22,30 @@ static void item_unlink_q(item *it);
 #define WARM_LRU 64
 #define COLD_LRU 128
 #define NOEXP_LRU 192
-static unsigned int lru_type_map[4] = {HOT_LRU, WARM_LRU, COLD_LRU, NOEXP_LRU};
+static unsigned int lru_type_map[4] = {HOT_LRU, WARM_LRU, COLD_LRU, NOEXP_LRU}; // LRU类型映射表
 
 #define CLEAR_LRU(id) (id & ~(3<<6))
 
 #define LARGEST_ID POWER_LARGEST
+// Items统计信息（结合“文本协议（protocol.txt）”一起来理解）
 typedef struct {
-    uint64_t evicted;
-    uint64_t evicted_nonzero;
-    uint64_t reclaimed;
-    uint64_t outofmemory;
-    uint64_t tailrepairs;
-    uint64_t expired_unfetched;
-    uint64_t evicted_unfetched;
+    uint64_t evicted; // 一条记录还未过期就被“LRU机制”强制驱逐的次数（包括不过期的记录）
+    uint64_t evicted_nonzero; // 一条设置了过期时间的记录还未过期就被“LRU机制”强制驱逐的次数（如果与evicted值不相等，就说明“不过期的记录”也被强制驱逐了，这时必须引起注意！！！）
+    uint64_t reclaimed; // 使用已过期记录的内存存储的记录数
+    uint64_t outofmemory; // 底层的“特定大小的chunk的组”无法存储新的记录的次数，这意味着你正在使用-M或驱逐允许失败。
+                          // （如果该值不为0，表示后续新的记录都无法存入缓存中，必须引起注意，一定要对其加监控！！！）
+    uint64_t tailrepairs; // 一个使用泄漏的引用计数的组自我修复的次数
+    uint64_t expired_unfetched; // 从LRU队列中回收的已过期的记录数，这些记录被设置后就从没被获取过
+    uint64_t evicted_unfetched; // 从LRU队列中驱逐的有效的记录数，这些记录被设置后就从没被获取过
     uint64_t crawler_reclaimed;
     uint64_t crawler_items_checked;
-    uint64_t lrutail_reflocked;
-    uint64_t moves_to_cold;
-    uint64_t moves_to_warm;
-    uint64_t moves_within_lru;
-    uint64_t direct_reclaims;
-    rel_time_t evicted_time;
+    uint64_t lrutail_reflocked; // 发现引用计数被锁在LRU队尾的记录数
+    uint64_t moves_to_cold; // 从“热或暖”LRU队列被移到“冷”LRU队列的记录数
+    uint64_t moves_to_warm; // 从“冷”LRU队列被移到“暖”LRU队列的记录数
+    uint64_t moves_within_lru; // 活跃记录在“热或暖”LRU队列命中的次数
+    uint64_t direct_reclaims; // 工作者线程直接拉取LRU队尾来查找新的记录的内存空间的次数
+    rel_time_t evicted_time; // 从该组被驱逐的最近的记录的最新访问时间（秒），使用该值来判断最近被驱逐的数据的活跃情况
+                             // （该值越大，说明被驱逐的记录越少；反之，说明这个Slab Class是热点）
 } itemstats_t;
 
 typedef struct {
@@ -56,11 +59,11 @@ typedef struct {
     bool run_complete;
 } crawlerstats_t;
 
-static item *heads[LARGEST_ID];
-static item *tails[LARGEST_ID];
+static item *heads[LARGEST_ID]; // Slab Class的队头列表
+static item *tails[LARGEST_ID]; // Slab Class的队尾列表
 static crawler crawlers[LARGEST_ID];
-static itemstats_t itemstats[LARGEST_ID];
-static unsigned int sizes[LARGEST_ID];
+static itemstats_t itemstats[LARGEST_ID]; // Slab Class的“记录统计信息”列表
+static unsigned int sizes[LARGEST_ID]; // Slab Class的“记录数”列表
 static crawlerstats_t crawlerstats[MAX_NUMBER_OF_SLAB_CLASSES];
 
 static int crawler_count = 0;
@@ -269,7 +272,7 @@ bool item_size_ok(const size_t nkey, const int flags, const int nbytes) {
     return slabs_clsid(ntotal) != 0;
 }
 
-static void do_item_link_q(item *it) { /* item is the new head */
+static void do_item_link_q(item *it) { /* item is the new head (新记录被插入到队头) */
     item **head, **tail;
     assert((it->it_flags & ITEM_SLABBED) == 0);
 
@@ -320,15 +323,15 @@ static void item_unlink_q(item *it) {
     pthread_mutex_unlock(&lru_locks[it->slabs_clsid]);
 }
 
-int do_item_link(item *it, const uint32_t hv) {
+int do_item_link(item *it, const uint32_t hv) {/* 将记录连接到LRU队列中 */
     MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
     assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);
     it->it_flags |= ITEM_LINKED;
-    it->time = current_time;
+    it->time = current_time; // 记录的存储时间使用Memcached自身的当前时间
 
     STATS_LOCK();
-    stats.curr_bytes += ITEM_ntotal(it);
-    stats.curr_items += 1;
+    stats.curr_bytes += ITEM_ntotal(it); // 计算所有记录实际使用的内存空间
+    stats.curr_items += 1; // “记录数”加1
     stats.total_items += 1;
     STATS_UNLOCK();
 
@@ -336,18 +339,18 @@ int do_item_link(item *it, const uint32_t hv) {
     ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
     assoc_insert(it, hv);
     item_link_q(it);
-    refcount_incr(&it->refcount);
+    refcount_incr(&it->refcount); // “引用计数”自增
 
     return 1;
 }
 
-void do_item_unlink(item *it, const uint32_t hv) {
+void do_item_unlink(item *it, const uint32_t hv) {/* 从LRU队列中移除记录 */
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
     if ((it->it_flags & ITEM_LINKED) != 0) {
         it->it_flags &= ~ITEM_LINKED;
         STATS_LOCK();
         stats.curr_bytes -= ITEM_ntotal(it);
-        stats.curr_items -= 1;
+        stats.curr_items -= 1; // “记录数”减1
         STATS_UNLOCK();
         assoc_delete(ITEM_key(it), it->nkey, hv);
         item_unlink_q(it);
@@ -370,7 +373,7 @@ void do_item_unlink_nolock(item *it, const uint32_t hv) {
     }
 }
 
-void do_item_remove(item *it) {
+void do_item_remove(item *it) {/* 移除记录 */
     MEMCACHED_ITEM_REMOVE(ITEM_key(it), it->nkey, it->nbytes);
     assert((it->it_flags & ITEM_SLABBED) == 0);
     assert(it->refcount > 0);
@@ -492,7 +495,7 @@ void item_stats_evictions(uint64_t *evicted) {
     }
 }
 
-void item_stats_totals(ADD_STAT add_stats, void *c) {
+void item_stats_totals(ADD_STAT add_stats, void *c) {/* 输出记录总数的统计信息 */
     itemstats_t totals;
     memset(&totals, 0, sizeof(itemstats_t));
     int n;
@@ -542,7 +545,7 @@ void item_stats_totals(ADD_STAT add_stats, void *c) {
     }
 }
 
-void item_stats(ADD_STAT add_stats, void *c) {
+void item_stats(ADD_STAT add_stats, void *c) {/* 输出记录的统计信息 */
     itemstats_t totals;
     int n;
     for (n = 0; n < MAX_NUMBER_OF_SLAB_CLASSES; n++) {
@@ -634,7 +637,7 @@ void item_stats(ADD_STAT add_stats, void *c) {
  * work, so items can't go invalid, and it's only looking at header sizes
  * which don't change.
  */
-void item_stats_sizes(ADD_STAT add_stats, void *c) {
+void item_stats_sizes(ADD_STAT add_stats, void *c) {/* 输出记录大小的统计信息 */
 
     /* max 1MB object, divided into 32 bytes size buckets */
     const int num_buckets = 32768;
@@ -671,10 +674,10 @@ void item_stats_sizes(ADD_STAT add_stats, void *c) {
 }
 
 /** wrapper around assoc_find which does the lazy expiration logic */
-item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
+item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {/* 获取记录 */
     item *it = assoc_find(key, nkey, hv);
     if (it != NULL) {
-        refcount_incr(&it->refcount);
+        refcount_incr(&it->refcount); // 自增“引用计数”（读锁）
         /* Optimization for slab reassignment. prevents popular items from
          * jamming in busy wait. Can only do this here to satisfy lock order
          * of item_lock, slabs_lock. */
@@ -719,7 +722,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
             if (was_found) {
                 fprintf(stderr, " -nuked by flush");
             }
-        } else if (it->exptime != 0 && it->exptime <= current_time) {
+        } else if (it->exptime != 0 && it->exptime <= current_time) { // 设置了过期时间的已过期的记录
             do_item_unlink(it, hv);
             do_item_remove(it);
             it = NULL;
@@ -739,7 +742,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
 }
 
 item *do_item_touch(const char *key, size_t nkey, uint32_t exptime,
-                    const uint32_t hv) {
+                    const uint32_t hv) {/* 获取记录，并更新记录的过期时间 */
     item *it = do_item_get(key, nkey, hv);
     if (it != NULL) {
         it->exptime = exptime;
@@ -747,7 +750,7 @@ item *do_item_touch(const char *key, size_t nkey, uint32_t exptime,
     return it;
 }
 
-/*** LRU MAINTENANCE THREAD ***/
+/*** LRU MAINTENANCE THREAD (LRU维护线程) ***/
 
 /* Returns number of items remove, expired, or evicted.
  * Callable from worker threads or the LRU maintainer thread */
@@ -768,8 +771,8 @@ static int lru_pull_tail(const int orig_id, const int cur_lru,
 
     id |= cur_lru;
     pthread_mutex_lock(&lru_locks[id]);
-    search = tails[id];
-    /* We walk up *only* for locked items, and if bottom is expired. */
+    search = tails[id]; // 从队尾开始搜索
+    /* We walk up *only* for locked items, and if bottom is expired. (仅遍历被锁住的且过期的记录) */
     for (; tries > 0 && search != NULL; tries--, search=next_it) {
         /* we might relink search mid-loop, so search->prev isn't reliable */
         next_it = search->prev;
@@ -778,7 +781,7 @@ static int lru_pull_tail(const int orig_id, const int cur_lru,
             tries++;
             continue;
         }
-        uint32_t hv = hash(ITEM_key(search), search->nkey);
+        uint32_t hv = hash(ITEM_key(search), search->nkey); // 哈希映射
         /* Attempt to hash item lock the "search" item. If locked, no
          * other callers can incr the refcount. Also skip ourselves. */
         if (hv == cur_hv || (hold_lock = item_trylock(hv)) == NULL)
@@ -801,7 +804,7 @@ static int lru_pull_tail(const int orig_id, const int cur_lru,
             }
         }
 
-        /* Expired or flushed */
+        /* Expired or flushed (过期的或刷新的) */
         if ((search->exptime != 0 && search->exptime < current_time)
             || is_flushed(search)) {
             itemstats[id].reclaimed++;
@@ -853,7 +856,7 @@ static int lru_pull_tail(const int orig_id, const int cur_lru,
                         /* Don't think we need a counter for this. It'll OOM.  */
                         break;
                     }
-                    itemstats[id].evicted++;
+                    itemstats[id].evicted++; // 被驱逐
                     itemstats[id].evicted_time = current_time - search->time;
                     if (search->exptime != 0)
                         itemstats[id].evicted_nonzero++;
@@ -992,7 +995,7 @@ static pthread_t lru_maintainer_tid;
 #define MAX_LRU_MAINTAINER_SLEEP 1000000
 #define MIN_LRU_MAINTAINER_SLEEP 1000
 
-static void *lru_maintainer_thread(void *arg) {
+static void *lru_maintainer_thread(void *arg) {/* LRU维护者线程 */
     int i;
     useconds_t to_sleep = MIN_LRU_MAINTAINER_SLEEP;
     rel_time_t last_crawler_check = 0;
@@ -1039,6 +1042,7 @@ static void *lru_maintainer_thread(void *arg) {
 
     return NULL;
 }
+
 int stop_lru_maintainer_thread(void) {
     int ret;
     pthread_mutex_lock(&lru_maintainer_lock);

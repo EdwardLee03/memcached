@@ -556,9 +556,9 @@ integers separated by a colon (treat this as a floating point number).
 | auth_cmds             | 64u     | Number of authentication commands         |
 |                       |         | handled, success or failure.              |
 | auth_errors           | 64u     | Number of failed authentications.         |
-| evictions             | 64u     | Number of valid items removed from cache  |
+| evictions             | 64u     | Number of valid items removed from cache  | 为新的记录释放内存而被从缓存中删除的有效的记录数
 |                       |         | to free memory for new items              |
-| reclaimed             | 64u     | Number of times an entry was stored using |
+| reclaimed             | 64u     | Number of times an entry was stored using | 使用已过期记录的内存存储的记录数
 |                       |         | memory from an expired entry              |
 | bytes_read            | 64u     | Total number of bytes read by this server |
 |                       |         | from network                              |
@@ -672,41 +672,44 @@ The following item values are defined as of writing.
 Name                   Meaning
 ------------------------------
 number                 Number of items presently stored in this class. Expired
-                       items are not automatically excluded.
+                       items are not automatically excluded. (目前存储在该组的记录数（已过期的记录已被自动排除在外）)
 number_hot             Number of items presently stored in the HOT LRU.
 number_warm            Number of items presently stored in the WARM LRU.
 number_cold            Number of items presently stored in the COLD LRU.
 number_noexp           Number of items presently stored in the NOEXP class.
-age                    Age of the oldest item in the LRU.
+age                    Age of the oldest item in the LRU. (LRU队列中最老的记录的存储时间)
 evicted                Number of times an item had to be evicted from the LRU
-                       before it expired.
+                       before it expired. (一条记录还未过期就被“LRU机制”强制驱逐的次数（包括不过期的记录）)
 evicted_nonzero        Number of times an item which had an explicit expire
                        time set had to be evicted from the LRU before it
-                       expired.
+                       expired. (一条设置了过期时间的记录还未过期就被“LRU机制”强制驱逐的次数
+                       （如果与evicted值不相等，就说明“不过期的记录”也被强制驱逐了，这时必须引起注意！！！）)
 evicted_time           Seconds since the last access for the most recent item
                        evicted from this class. Use this to judge how
-                       recently active your evicted data is.
+                       recently active your evicted data is. (从该组被驱逐的最近的记录的最新访问时间（秒），使用该值来判断最近被驱逐的数据的活跃情况
+                       （该值越大，说明被驱逐的记录越少；反之，说明这个Slab Class是热点）)
 outofmemory            Number of times the underlying slab class was unable to
                        store a new item. This means you are running with -M or
-                       an eviction failed.
+                       an eviction failed. (底层的“特定大小的chunk的组”无法存储新的记录的次数，这意味着你正在使用-M或驱逐允许失败。
+                       （如果该值不为0，表示后续新的记录都无法存入缓存中，必须引起注意，一定要对其加监控！！！）)
 tailrepairs            Number of times we self-healed a slab with a refcount
                        leak. If this counter is increasing a lot, please
-                       report your situation to the developers.
+                       report your situation to the developers. (一个使用泄漏的引用计数的组自我修复的次数)
 reclaimed              Number of times an entry was stored using memory from
-                       an expired entry.
+                       an expired entry. (使用已过期记录的内存存储的记录数)
 expired_unfetched      Number of expired items reclaimed from the LRU which
-                       were never touched after being set.
+                       were never touched after being set. (从LRU队列中回收的已过期的记录数，这些记录被设置后就从没被获取过)
 evicted_unfetched      Number of valid items evicted from the LRU which were
-                       never touched after being set.
+                       never touched after being set. (从LRU队列中驱逐的有效的记录数，这些记录被设置后就从没被获取过)
 crawler_reclaimed      Number of items freed by the LRU Crawler.
 lrutail_reflocked      Number of items found to be refcount locked in the
-                       LRU tail.
-moves_to_cold          Number of items moved from HOT or WARM into COLD.
-moves_to_warm          Number of items moved from COLD to WARM.
+                       LRU tail. (发现引用计数被锁在LRU队尾的记录数)
+moves_to_cold          Number of items moved from HOT or WARM into COLD. (从“热或暖”LRU队列被移到“冷”LRU队列的记录数)
+moves_to_warm          Number of items moved from COLD to WARM. (从“冷”LRU队列被移到“暖”LRU队列的记录数)
 moves_within_lru       Number of times active items were bumped within
-                       HOT or WARM.
+                       HOT or WARM. (活跃记录在“热或暖”LRU队列命中的次数)
 direct_reclaims        Number of times worker threads had to directly pull LRU
-                       tails to find memory for a new item.
+                       tails to find memory for a new item. (工作者线程直接拉取LRU队尾来查找新的记录的内存空间的次数)
 
 Note this will only display information about slabs which exist, so an empty
 cache will return an empty set.
